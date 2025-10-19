@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lakehouse Cost Optimization Guide</title>
+    <!-- Load Tailwind CSS --><script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom font import for better presentation look */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            width: 100vw;
+            transition: background-color 0.5s;
+            /* Allow content expansion and natural scrolling */
+            min-height: 100vh;
+            overflow-x: hidden; /* Prevent horizontal scroll */
+        }
+        
+        /* Removed strict height and overflow: hidden from body, 
+           relying on min-height and natural document flow */
+        
+        /* Ensure HTML element allows content to expand */
+        html {
+            overflow-y: auto;
+        }
+
+        /* Keyframes for a subtle entrance animation */
+        @keyframes fadeInSlide {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animated-card {
+            animation: fadeInSlide 0.5s ease-out forwards;
+        }
+
+        .data-arrow {
+            width: 4px;
+            height: 30px; /* Further reduced height for space efficiency */
+            background-color: #4b5563; /* Gray 600 */
+            position: relative;
+            margin: 0 auto;
+            border-radius: 2px;
+            opacity: 0.8;
+            transition: background-color 0.3s;
+        }
+
+        .data-arrow::after {
+            content: '';
+            position: absolute;
+            bottom: -5px;
+            left: -8px;
+            width: 0;
+            height: 0;
+            border-left: 10px solid transparent;
+            border-right: 10px solid transparent;
+            border-top: 10px solid #4b5563;
+            transition: border-top-color 0.3s;
+        }
+
+        .expensive-callout {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(150px, -150px) rotate(15deg);
+            background-color: #dc2626; /* Red 600 */
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-weight: 800;
+            box-shadow: 0 4px 10px rgba(220, 38, 38, 0.4);
+            animation: shake 0.5s infinite alternate;
+        }
+
+        @keyframes shake {
+            from { transform: translate(150px, -150px) rotate(10deg); }
+            to { transform: translate(145px, -155px) rotate(18deg); }
+        }
+
+        /* Qbeast Brand Glow Animation (Pink/Magenta - #DB2777) */
+        @keyframes qbeastGlow {
+            0%, 100% { box-shadow: 0 0 0px #db2777, 0 0 0px #db2777; border-color: #db2777; }
+            50% { box-shadow: 0 0 20px #db2777, 0 0 40px #db2777; border-color: #f472b6; } 
+        }
+        .qbeast-glowing-card {
+            animation: qbeastGlow 1.5s infinite ease-in-out alternate;
+        }
+
+        /* e6data Brand Glow Animation (Vibrant Purple - #6D28D9) */
+        @keyframes e6dataGlow {
+            0%, 100% { box-shadow: 0 0 0px #6d28d9, 0 0 0px #6d28d9; border-color: #6d28d9; }
+            50% { box-shadow: 0 0 20px #6d28d9, 0 0 40px #6d28d9; border-color: #a78bfa; } /* Violet-700 / Violet-400 */
+        }
+        .e6data-glowing-card {
+            animation: e6dataGlow 1.5s infinite ease-in-out alternate;
+            cursor: pointer; /* Indicate clickability */
+        }
+        
+        /* Modal Styles */
+        .modal-overlay {
+            position: fixed; /* Use fixed positioning to always cover the viewport */
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+        }
+
+        .modal-content {
+            background-color: #1f2937; /* Darker than background */
+            border-radius: 0.75rem;
+            padding: 2rem;
+            width: 90%;
+            max-width: 600px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            transform: scale(1);
+            animation: modalPop 0.3s ease-out forwards;
+            border: 2px solid #6d28d9; /* e6data brand border */
+        }
+
+        @keyframes modalPop {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-50">
+
+    <div id="app-container" class="p-4 md:p-8 w-11/12 max-w-5xl text-center relative mx-auto">
+        <!-- Content will be rendered here by JavaScript -->
+    </div>
+
+    <!-- The Modal Container (Hidden by default) -->
+    <div id="modal-container" class="modal-overlay hidden">
+        <div id="modal-content" class="modal-content">
+            <!-- Modal content will be inserted here -->
+        </div>
+    </div>
+
+    <script>
+        // --- MODAL LOGIC ---
+        const modalContainer = document.getElementById('modal-container');
+        const modalContent = document.getElementById('modal-content');
+        
+        // E6Data brand colors
+        const E6DATA_COLOR = '#6d28d9'; // Violet-700
+        const E6DATA_TEXT_COLOR = 'text-violet-400';
+        const E6DATA_BG_COLOR = 'bg-violet-900/50';
+        const E6DATA_BORDER_COLOR = 'border-violet-700';
+
+        const openE6dataModal = () => {
+            modalContent.innerHTML = `
+                <h3 class="text-3xl font-bold ${E6DATA_TEXT_COLOR} mb-6">e6data's Compute Optimization</h3>
+                <p class="text-xl text-gray-300 mb-8">
+                    e6data is designed to deliver industry-leading price-performance for your Lakehouse queries by addressing bottlenecks inherent in legacy compute engines.
+                </p>
+                <ul class="text-left text-lg text-gray-200 space-y-4">
+                    <li class="flex items-start">
+                        ${getIconSvg('check', E6DATA_TEXT_COLOR)}
+                        <div>
+                            <span class="font-semibold text-white">Cloud-Native Architecture:</span> Instantly scales up and down, eliminating fixed cluster costs and wasted idle time.
+                        </div>
+                    </li>
+                    <li class="flex items-start">
+                        ${getIconSvg('check', E6DATA_TEXT_COLOR)}
+                        <div>
+                            <span class="font-semibold text-white">Advanced Query Engine:</span> Leverages a vectorized engine with modern compiler techniques for unparalleled speed.
+                        </div>
+                    </li>
+                    <li class="flex items-start">
+                        ${getIconSvg('check', E6DATA_TEXT_COLOR)}
+                        <div>
+                            <span class="font-semibold text-white">Smart Caching:</span> Automatically caches metadata and intermediate results to ensure repeat queries are nearly instantaneous.
+                        </div>
+                    </li>
+                    <li class="flex items-start">
+                        ${getIconSvg('check', E6DATA_TEXT_COLOR)}
+                        <div>
+                            <span class="font-semibold text-white">Cost Visibility:</span> Provides granular usage data so you know exactly where your compute spend is going.
+                        </div>
+                    </li>
+                </ul>
+                <div class="mt-8">
+                    <button onclick="closeModal()" class="bg-violet-600 hover:bg-violet-700 text-white font-bold py-2 px-6 rounded-full transition duration-300">
+                        Close Details
+                    </button>
+                </div>
+            `;
+            // Ensure the modal border color is updated
+            modalContent.style.borderColor = E6DATA_COLOR;
+            modalContainer.classList.remove('hidden');
+        };
+
+        const closeModal = () => {
+            modalContainer.classList.add('hidden');
+        };
+
+        // Attach event listener to close modal when clicking the overlay itself
+        modalContainer.addEventListener('click', (e) => {
+            if (e.target.id === 'modal-container') {
+                closeModal();
+            }
+        });
+
+
+        // --- DATA DEFINITIONS ---
+
+        // Qbeast brand colors
+        const QBEAST_COLOR = '#db2777'; // Pink-600 (Magenta)
+        const QBEAST_TEXT_COLOR = 'text-pink-400';
+        const QBEAST_BG_COLOR = 'bg-pink-900/50';
+        const QBEAST_BORDER_COLOR = 'border-pink-600';
+
+
+        // Helper function for icon SVG (using base64 for Qbeast logo for simplicity in single HTML)
+        const getIconSvg = (name, colorClass) => {
+            const icons = {
+                compute: `<svg class="w-8 h-8 ${colorClass}" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H7l-5 5 5 5h10l5-5-5-5z"/></svg>`,
+                format: `<svg class="w-8 h-8 ${colorClass}" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 16 2 2 4-4-4-4-2 2z"/><path d="m8 10 2 2 4-4-4-4-2 2z"/><path d="m14 4 2 2 4-4-4-4-2 2z"/></svg>`,
+                storage: `<svg class="w-8 h-8 ${colorClass}" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2z"/><rect x="6" y="10" width="12" height="4" rx="1"/></svg>`,
+                check: `<svg class="w-6 h-6 mr-2 text-green-400" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+                // Qbeast logo (base64 encoded SVG)
+                qbeast_logo: `<img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCA1MjIgNTIyIiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgogICAgPHBhdGggZD0iTTUwMS40ODggMjYwLjc3MUM1MDYuMTUxIDI3My41NTUgNTA5LjM5MyAyODcuNDQ5IDUxMS4xMjcgMzA3LjYyNkM1MTUuMzYyIDM1NS40MDcgNTAzLjM4MyAzOTUuMDI3IDQ3Ni4wMDYgNDQzLjA2QzQ2NC4zNzIgNDYzLjM2MSA0NTEuMTA4IDQ4Mi42NDIgNDI4LjM3MSA1MDEuNTI0QzM5NC4yNzMgNTI1LjExMSAzNjEuMzk2IDUwNy45NjUgMzEzLjE5MyA1MDkuNjQxQzI3Ni4zMTIgNTExLjI1NyAyNDguOTE2IDQ2NC4wMzMgMjMyLjAzNSA0NDMuOTU5QzIyMy44MjMgNDMxLjE5IDQyMi4xMiAyMDguNDk5IDQwNS4wN0MxOTQuNjEyIDM4MS4wMjggMTc1LjY0NiAzNTMuNTk0IDE2My44ODggMzM1LjYyQzE1MS45MjQgMzE3LjM0MiAxNDguNDg3IDMwNi41MTQgMTQ0LjcxNiAyODcuMDM3QzE0MC40ODkgMjY1LjA2MyAxMzguMjc4IDI0NC42MzYgMTQ3LjAzMSAyMTguMjY1QzE1Ni4yMzEgMTkwLjI0MSAxODMuMzk5IDE1Ny4yMDQgMjAyLjY2MSAxMzYuODg4QzIyNi42MTcgMTE0LjE3OSAyNTMuMjUyIDEwMC40OTMgMjczLjA4MSAxMTAuMTQyQzI4Mi40NTQgMTE1LjE0NCAyOTcuNjIyIDEzNS42NjMgMzAwLjY5MiAxNDcuMDQ3QzMxMC40ODkgMTg0LjcxNSAyNzkuMjM3IDIwOS4xNDQgMjc0LjYxNiAyMjYuNzYzQzI3My42MzUgMjMwLjY4OCAyNzIuOTUzIDI0MS40MzcgMjg1LjU2MSAyNTQuOTE4QzI5Ni42ODcgMjY2LjgyMiAzMTcuNzcxIDI4MS42MzQgMzQzLjExMyAyODcuOTk2QzM2NC4wMTkgMjkzLjMyNSAzOTYuMDQ2IDI4NS4xMjggNDExLjEzIDI3My42NDhDMzc4LjEzNSAyNjcuMDU0IDM1Ny41OTggMjU4LjEwNyAzNDUuNzQ0IDI0OS40NjhDMzQwLjA1MyAyNDUuNTQ1IDMzNC4yODMgMjQxLjA4NiAzMjYuMDY5IDIzMy44MUMzMTcuMjk4IDIyNi4wMTEgMzAyLjU2MSAyMTIuMjQ4IDI5Ni4zNzYgMjAyLjcwNEMyODUuNzYgMTg0LjY5NyAyODQuNTgyIDE2Mi40OTQgMjk3LjQ3NSAxNDQuNDcyQzMwMi42OTggMTM1LjY3OCAzMDkuMzc4IDEyNy4xMTEgMzE2LjIzNSAxMTcuNTk2QzMyMy40NTMgMTA4LjM5MyAzMjkuNTM2IDk3LjA3OSAzMzcuMTMzIDg2LjY0LjY0IDU0LjMwNyAzOTAuMjI1IDUzLjM1QzM5Ni4wMzMgNTIuOTM3IDQwMi4yNTkgNDkuOTcyIDQwOS44NDkgNDUuMzM4NEM0MTcuNDAzIDQwLjcwNTQgNDI1LjA2NiAzNi4wODkyIDQzMi42OTkgMzEuNjY0NEM0NDAuNjQ4IDI3LjAxNDMgNDQ4LjExOCAyMi4xNzc3IDQ1Ni4wODYgMTcuNDA0MkM0NjQuMDU0IDEyLjYzMiA0NzIuMjM3IDcuNzY3NTMgNDgwLjQ5OSAzLjI2OTg1QzQ5MC4wNTYgLTIuMDc0NzEgNTAxLjA3IDAuNjc3MTExIDUxMC4wNSA2Ljg1MzExQjUxOS4wMzcgMTMuMDM2NiA1MjQuNDE5IDI0LjAyODcgNTE2LjcyNyAzNy4yMzg3QzQ5OS45MTYgNjUuMzA0NyA0NjEuNzUgNzguNjY1NyA0NDIuNTU3IDkzLjQ4OTdDNDIxLjY0NiAxMDguNjg0IDQwMi40ODggMTIyLjE1MyAzNzEuNjUyIDEzNy42NUNNMTQ1LjI4NiAzMzguODQ0IDE1My40NjggMzMwLjY2NSAxNjMuMzEyQzMyMi42OTIgMTczLjAzMiAzMTUuNjYgMTgyLjY1MSAzMTUuOTkyIDE5MS44MDJDMzE2LjM1NyAyMDAuODY5IDMyMi44NTYgMjA4LjA0MyAzMzAuNDg5IDIxMy4zMjdDMzQyLjM3NSAyMjEuMzY5IDM1NS40MjkgMjI5LjYxNiAyMjYuNzYzQzI3My42MzUgMjMwLjY4OCAyNzIuOTUzIDI0MS40MzcgMjg1LjU2MSAyNTQuOTE4QzI5Ni42ODcgMjY2LjgyMiAzMTcuNzcxIDI4MS42MzQgMzQzLjExMyAyODcuOTk2QzM2NC4wMTkgMjkzLjMyNSAzOTYuMDQ2IDI4NS4xMjggNDExLjEzIDI3My42NDhDMzc4LjEzNSAyNjcuMDU0IDM1Ny41OTggMjU4LjEwNyAzNDUuNzQ0IDI0OS40NjhDMzQwLjA1MyAyNDUuNTQ1IDMzNC4yODMgMjQxLjA4NiAzMjYuMDY5IDIzMy44MUMzMTcuMjk4IDIyNi4wMTEgMzAyLjU2MSAyMTIuMjQ4IDI5Ni4zNzYgMjAyLjcwNEMyODUuNzYgMTg0LjY5NyAyODQuNTgyIDE2Mi40OTQgMjk3LjQ3NSAxNDQuNDcyQzMwMi42OTggMTM1LjY3OCAzMDkuMzc4IDEyNy4xMTEgMzE2LjIzNSAxMTcuNTk2QzMyMy40NTMgMTA4LjM5MyAzMjkuNTM2IDk3LjA3OSAzMzcuMTMzIDg2LjY0LjY0IDU0LjMwNyAzOTAuMjI1IDUzLjM1QzM5Ni4wMzMgNTIuOTM3IDQwMi4yNTkgNDkuOTcyIDQwOS44NDkgNDUuMzM4NEM0MTcuNDAzIDQwLjcwNTQgNDI1LjA2NiAzNi4wODkyIDQzMi42OTkgMzEuNjY0NEM0NDAuNjQ4IDI3LjAxNDMgNDQ4LjExOCAyMi4xNzc3IDQ1Ni4wODYgMTcuNDA0MkM0NjQuMDU0IDEyLjYzMiA0NzIuMjM3IDcuNzY3NTMgNDgwLjQ5OSAzLjI2OTg1QzQ5MC4wNTYgLTIuMDc0NzEgNTAxLjA3IDAuNjc3MTExIDUxMC4wNSA2Ljg1MzExQjUxOS4wMzcgMTMuMDM2NiA1MjQuNDE5IDI0LjAyODcgNTE2LjcyNyAzNy4yMzg3QzQ5OS45MTYgNjUuMzA0NyA0NjEuNzUgNzguNjY1NyA0NDIuNTU3IDkzLjQ4OTdDNDIxLjY0NiAxMDguNjg0IDQwMi40ODggMTIyLjE1MyAzNzEuNjUyIDEzNy42NUNNMTQ1LjI4NiAzMzguODQ0IDE1My40NjggMzMwLjY2NSAxNjMuMzEyQzMyMi42OTIgMTczLjAzMiAzMTUuNjYgMTgyLjY1MSAzMTUuOTkyIDE5MS44MDJDMzE2LjM1NyAyMDAuODY5IDMyMi44NTYgMjA4LjA0MyAzMzAuNDg5IDIxMy4zMjdDMzQyLjM3NSAyMjEuMzY5IDM1NS40MjkgMjI5LjYxNiAyMjYuNzYzQzI3My42MzUgMjMwLjY4OCAyNzIuOTUzIDI0MS40MzcgMjg1LjU2MSAyNTQuOTE4QzI5Ni42ODcgMjY2LjgyMiAzMTcuNzcxIDI4MS42MzQgMzQzLjExMyAyODcuOTk2QzM2NC4wMTkgMjkzLjMyNSAzOTYuMDQ2IDI4NS4xMjggNDExLjEzIDI3My42NDhDMzc4LjEzNSAyNjcuMDU0IDM1Ny41OTggMjU4LjEwNyAzNDUuNzQ0IDI0OS40NjhDMzQwLjA1MyAyNDUuNTQ1IDMzNC4yODMgMjQxLjA4NiAzMjYuMDY5IDIzMy44MUMzMTcuMjk4IDIyNi4wMTEgMzAyLjU2MSAyMTIuMjQ4IDI5Ni4zNzYgMjAyLjcwNEMyODUuNzYgMTg0LjY5NyAyODQuNTgyIDE2Mi40OTQgMjk3LjQ3NSAxNDQuNDcyQzMwMi42OTggMTM1LjY3OCAzMDkuMzc4IDEyNy4xMTEgMzE2LjIzNSAxMTcuNTk2QzMyMy40NTMgMTA4LjM5MyAzMjkuNTM2IDk3LjA3OSAzMzcuMTMzIDg2LjY5NDIgMzczLjgyMiAzOTAuMjI1IDUzLjM1QzM5Ni4wMzMgNTIuOTM3IDQwMi4yNTkgNDkuOTcyIDQwOS44NDkgNDUuMzM4NEM0MTcuNDAzIDQwLjcwNTQgNDI1LjA2NiAzNi4wODkyIDQzMi42OTkgMzEuNjY0NEM0NDAuNjQ4IDI3LjAxNDMgNDQ4LjExOCAyMi4xNzc3IDQ1Ni4wODYgMTcuNDA0MkM0NjQuMDU0IDEyLjYzMiA0NzIuMjM3IDcuNzY3NTMgNDgwLjQ5OSAzLjI2OTg1QzQ5MC4wNTYgLTIuMDc0NzEgNTAxLjA3IDAuNjc3MTExIDUxMC4wNSA2Ljg1MzExQjUxOS4wMzcgMTMuMDM2NiA1MjQuNDE5IDI0LjAyODcgNTE2LjcyNyAzNy4yMzg3QzQ5OS45MTYgNjUuMzA0NyA0NjEuNzUgNzguNjY1NyA0NDIuNTU3IDkzLjQ4OTdDNDIxLjY0NiAxMDguNjg0IDQwMi40ODggMTIyLjE1MyAzNzEuNjUyIDEzNy42NUNNMTQ1LjI4NiAzMzguODQ0IDE1My40NjggMzMwLjY2NSAxNjMuMzEyQzMyMi42OTIgMTczLjAzMiAzMTUuNjYgMTgyLjY1MSAzMTUuOTkyIDE5MS44MDJDMzE2LjM1NyAyMDAuODY5IDMyMi44NTYgMjA4LjA0MyAzMzAuNDg5IDIxMy4zMjdDMzQyLjM3NSAyMjEuMzY5IDM1NS40MjkgMjI5LjYxNiAyMjYuNzYzQzI3My42MzUgMjMwLjY4OCAyNzIuOTUzIDI0MS40MzcgMjg1LjU2MSAyNTQuOTE4QzI5Ni42ODcgMjY2LjgyMiAzMTcuNzcxIDI4MS42MzQgMzQzLjExMyAyODcuOTk2QzM2NC4wMTkgMjkzLjMyNSAzOTYuMDQ2IDI4NS4xMjggNDExLjEzIDI3My42NDhDMzc4LjEzNSAyNjcuMDU0IDM1Ny41OTggMjU4LjEwNyAzNDUuNzI5IDE4Mi42NTFDMzE1Ljk5MiAxOTEuODA4QzI3My42MzUgMjMwLjY4OCAyNzIuOTUzIDI0MS40MzcgMjg1LjU2MSAyNTQuOTE4QzI5Ni42ODcgMjY2LjgyMiAzMTcuNzcxIDI4MS42MzQgMzQzLjExMyAyODcuOTk2QzM2NC4wMTkgMjkzLjMyNSAzOTYuMDQ2IDI4NS4xMjggNDExLjEzIDI3My42NDhDMzc4LjEzNSAyNjcuMDU0IDM1Ny41OTggMjU4LjEwNyAzNDUuNzI5IDExMC4xNDJaIiBmaWxsPSIjZGIyNzc3Ii8+CjwvZ3VpZGVzZGVzaWduZXI+Cg==" class="w-8 h-8 ${colorClass}" alt="Qbeast Logo" />`
+            };
+            return icons[name] || '';
+        };
+
+        const ARCHITECTURE_DATA = [
+            { id: 'compute', title: 'Compute Layer', subtitle: 'Spark / Trino', icon: 'compute', base_color: 'text-indigo-300', default_bg: 'bg-gray-800', description: 'Executes queries and analytical workloads.' },
+            { id: 'format', title: 'Table Format & Metadata', subtitle: 'Delta Lake / Iceberg / Hudi', icon: 'format', base_color: 'text-indigo-300', default_bg: 'bg-gray-800', description: 'Provides ACID properties and schema management.' },
+            { id: 'storage', title: 'Object Storage', subtitle: 'S3 / ADLS / GCS', icon: 'storage', base_color: 'text-blue-300', default_bg: 'bg-gray-800', description: 'Scalable and durable storage for all raw data files.' }
+        ];
+
+        // --- PAGE RENDERING LOGIC ---
+
+        // Renders the architecture stack. Dynamically handles the 3-layer or 4-layer (with Qbeast) view.
+        const renderArchitecture = (pageData) => {
+            let html = [];
+            const isQbeastPresent = pageData.solution === 'Qbeast' || pageData.solution === 'Hybrid';
+            const isE6dataPage = pageData.solution === 'e6data';
+            const isHybridPage = pageData.solution === 'Hybrid';
+
+            ARCHITECTURE_DATA.forEach((layer, index) => {
+                const isHighlight = pageData.highlight_layers.includes(layer.id);
+                
+                // Determine base color classes from pageData if it's not the Hybrid page
+                let color = isHighlight ? pageData.highlight_color : layer.base_color;
+                let border = isHighlight ? `border-2 ${pageData.highlight_border}` : 'border-0 border-indigo-500';
+                let bg = isHighlight ? pageData.highlight_bg : layer.default_bg;
+                const detail = pageData.highlight_detail[layer.id] || layer.description;
+
+                // --- LOGIC FOR HYBRID COLORING: Overrides pageData colors to use brand colors ---
+                if (isHybridPage && isHighlight) {
+                    if (layer.id === 'compute') {
+                        // Use E6Data colors for the Compute Layer
+                        color = E6DATA_TEXT_COLOR;
+                        border = `border-2 ${E6DATA_BORDER_COLOR}`;
+                        bg = E6DATA_BG_COLOR;
+                    } else if (layer.id === 'format' || layer.id === 'storage') {
+                        // Use Qbeast colors for the data layers influenced by Qbeast indexing
+                        color = QBEAST_TEXT_COLOR;
+                        border = `border-2 ${QBEAST_BORDER_COLOR}`;
+                        bg = QBEAST_BG_COLOR;
+                    }
+                }
+                // --- END HYBRID COLORING LOGIC ---
+
+
+                // Determine if glow is needed and add click handler for e6data
+                let glowClass = '';
+                let clickHandler = '';
+                let customSubtitle = layer.subtitle;
+
+                if (layer.id === 'compute') {
+                    if (isE6dataPage) {
+                        glowClass = 'e6data-glowing-card';
+                        clickHandler = 'onclick="openE6dataModal()"';
+                        customSubtitle = 'e6data Optimized Engine';
+                    } else if (isHybridPage) {
+                        customSubtitle = 'e6data Optimized Engine / Spark / Trino';
+                    }
+                }
+
+                // Render the main layer card
+                html.push(`
+                    <div id="${layer.id}-card" class="animated-card ${bg} p-4 md:p-6 rounded-xl shadow-2xl w-full max-w-lg ${border} transition duration-300 ${glowClass}" ${clickHandler} style="animation-delay: ${index * 0.3}s;">
+                        <div class="flex items-center justify-center space-x-4">
+                            ${getIconSvg(layer.icon, color)}
+                            <div>
+                                <h2 class="text-xl md:text-2xl font-bold text-white">${layer.title} ${isHighlight ? ` (${pageData.solution.toUpperCase()} OPTIMIZED)` : ''}</h2>
+                                <p class="text-md md:text-lg ${color} mt-1">${customSubtitle}</p>
+                            </div>
+                        </div>
+                        <p class="text-gray-400 mt-2 text-sm">${detail}</p>
+                    </div>
+                `);
+
+                // Insert the Qbeast Layer if applicable, right after the Table Format layer
+                if (layer.id === 'format' && isQbeastPresent) {
+                    const qbeastGlowClass = pageData.solution === 'Qbeast' ? 'qbeast-glowing-card' : ''; // Apply glow only for Qbeast page
+
+                    html.push(`
+                        <div class="data-arrow animated-card" style="background-color: ${QBEAST_COLOR}; animation-delay: ${(index + 0.5) * 0.3}s;"></div>
+                        <div class="animated-card ${QBEAST_BG_COLOR} p-3 md:p-4 rounded-xl shadow-2xl w-full max-w-lg ${QBEAST_BORDER_COLOR.replace('border-', 'border-2 border-')} transition duration-300 ${qbeastGlowClass}" style="animation-delay: ${(index + 1) * 0.3}s;">
+                            <div class="flex items-center justify-center space-x-4">
+                                ${getIconSvg('qbeast_logo', QBEAST_TEXT_COLOR)}
+                                <div>
+                                    <h2 class="text-xl font-bold text-white">Qbeast Indexing Layer</h2>
+                                    <p class="text-md ${QBEAST_TEXT_COLOR} mt-1">Multi-Dimensional Clustering & Sampling</p>
+                                </div>
+                            </div>
+                            <p class="text-gray-400 mt-2 text-sm">
+                                **Core Optimization:** Rewrites data to enable fast data skipping and smart sampling, minimizing I/O and boosting query speed (2-6x faster).
+                            </p>
+                        </div>
+                    `);
+                }
+
+
+                // Render arrows, ensuring the last layer (Storage) doesn't get one
+                if (layer.id !== 'storage') {
+                    // Adjust arrow color based on active solution
+                    let arrowColor = '#4b5563'; // Default Gray
+                    if (isE6dataPage && layer.id === 'compute') {
+                        arrowColor = E6DATA_COLOR;
+                    } else if (isQbeastPresent && layer.id === 'format') {
+                        arrowColor = QBEAST_COLOR;
+                    } else if (isHybridPage) {
+                        // Hybrid uses Qbeast and E6Data colors for the relevant arrows
+                        if (layer.id === 'compute') {
+                            arrowColor = E6DATA_COLOR;
+                        } else if (layer.id === 'format') {
+                            arrowColor = QBEAST_COLOR;
+                        }
+                    }
+                    
+                    const arrowDelay = isQbeastPresent && layer.id === 'format' ? (index + 2) * 0.3 : (index + 1) * 0.3;
+
+                    html.push(`
+                        <div class="data-arrow animated-card" style="background-color: ${arrowColor}; animation-delay: ${arrowDelay}s;"></div>
+                    `);
+                }
+            });
+
+            return html.join('');
+        };
+
+        const renderSavings = (savings) => `
+            <div class="mt-4 p-4 bg-green-900/40 rounded-xl max-w-md mx-auto animated-card" style="animation-delay: 2.5s;">
+                <h3 class="text-xl font-bold text-green-400">Estimated Cost Savings</h3>
+                <p class="text-4xl font-extrabold text-green-300 mt-2">${savings}</p>
+            </div>
+        `;
+
+        const renderPage = (pageName, prevChoice = 'none') => {
+            const container = document.getElementById('app-container');
+            container.innerHTML = '';
+            
+            // Set the container class to allow top alignment and responsive padding
+            container.className = "pt-6 p-4 md:pt-8 md:p-8 w-11/12 max-w-5xl text-center relative mx-auto flex flex-col items-center justify-start"; 
+            
+            // Reset body class.
+            document.body.className = "bg-gray-900 text-gray-50";
+
+            closeModal(); // Ensure modal is closed on page change
+
+            let content = '';
+            let title = '';
+
+            // Apply strict vertical centering (h-screen) only to pages with minimal content.
+            // All other pages will flow naturally, allowing scroll.
+            if (pageName === 'challenge' || pageName === 'decision') {
+                container.classList.add('justify-center', 'min-h-[100vh]'); // Use min-h-screen for centering when content is small
+            } else {
+                container.classList.remove('justify-center', 'min-h-[100vh]');
+                container.classList.add('justify-start');
+            }
+
+
+            switch (pageName) {
+                case 'challenge':
+                    title = 'The Lakehouse Challenge: Compute Costs';
+                    content = `
+                        <h1 class="text-4xl md:text-5xl font-extrabold text-red-400 mb-8 md:mb-10 tracking-tight animated-card mt-0">
+                            ${title}
+                        </h1>
+
+                        <div class="flex flex-col items-center space-y-3 md:space-y-4">
+                            ${renderArchitecture({
+                                solution: 'challenge', // added solution key for consistency
+                                highlight_layers: ['compute'],
+                                highlight_color: 'text-red-300',
+                                highlight_border: 'border-red-500',
+                                highlight_bg: 'bg-red-900/50',
+                                highlight_detail: {
+                                    compute: '**Resource Intensive:** Running queries on massive datasets requires high-cost, provisioned clusters.',
+                                    format: ARCHITECTURE_DATA.find(d => d.id === 'format').description,
+                                    storage: ARCHITECTURE_DATA.find(d => d.id === 'storage').description
+                                }
+                            })}
+                        </div>
+                        <div class="mt-8 md:mt-12 animated-card flex-shrink-0" style="animation-delay: 2s;">
+                            <h2 class="text-2xl md:text-3xl font-semibold text-white mb-4 md:mb-6">Do you want to fix the compute costs here?</h2>
+                            <button onclick="renderPage('decision')" class="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-8 rounded-full text-lg md:text-xl shadow-lg transition duration-300 transform hover:scale-105">
+                                Yes, let's cut costs!
+                            </button>
+                        </div>
+                        <div class="expensive-callout text-xl animated-card" style="animation-delay: 0.5s;">
+                            EXPENSIVE
+                        </div>
+                    `;
+                    break;
+
+                case 'decision':
+                    title = 'Where Should We Focus the Optimization?';
+                    content = `
+                        <h1 class="text-4xl font-extrabold text-indigo-400 mb-8 md:mb-10 tracking-tight animated-card mt-0">
+                            ${title}
+                        </h1>
+                        <p class="text-lg md:text-xl text-gray-300 mb-6 md:mb-10 animated-card flex-shrink-0" style="animation-delay: 0.2s;">
+                            Cost efficiency can be achieved by optimizing either the **data** or the **engine**.
+                        </p>
+
+                        <div class="flex flex-col md:flex-row space-y-6 md:space-y-0 md:space-x-8 justify-center flex-grow">
+                            <div class="flex flex-col items-start p-6 bg-gray-800 rounded-xl shadow-xl border-t-4 ${QBEAST_BORDER_COLOR} animated-card hover:bg-gray-700 transition duration-300" style="animation-delay: 0.5s;">
+                                <h3 class="text-2xl font-bold ${QBEAST_TEXT_COLOR} mb-4">Indexing / Storage Layer Fix (Data-First)</h3>
+                                <p class="text-gray-400 mb-4">
+                                    **Optimization Goal:** Make the data intelligent so the compute engine reads less.
+                                </p>
+                                <ul class="text-left text-gray-300 mb-8 space-y-2 flex-grow">
+                                    <li class="flex items-start">
+                                        ${getIconSvg('check', QBEAST_TEXT_COLOR)} 
+                                        <span>Implement better data indexing and clustering.</span>
+                                    </li>
+                                    <li class="flex items-start">
+                                        ${getIconSvg('check', QBEAST_TEXT_COLOR)} 
+                                        <span>Reduce data scan size on every query.</span>
+                                    </li>
+                                </ul>
+                                <div class="w-full flex justify-center mt-auto flex-shrink-0"> 
+                                    <button onclick="renderPage('qbeast', 'storage')" class="bg-pink-600 hover:bg-pink-700 text-white font-bold py-3 px-8 rounded-full text-lg shadow-lg transition duration-300 transform hover:scale-105 w-full">
+                                        Select Qbeast Solution
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-col items-start p-6 bg-gray-800 rounded-xl shadow-xl border-t-4 ${E6DATA_BORDER_COLOR} animated-card hover:bg-gray-700 transition duration-300" style="animation-delay: 0.8s;">
+                                <h3 class="text-2xl font-bold ${E6DATA_TEXT_COLOR} mb-4">Compute Layer Fix (Engine-First)</h3>
+                                <p class="text-gray-400 mb-6">
+                                    **Optimization Goal:** Make the query engine itself run faster and more efficiently.
+                                </p>
+                                <ul class="text-left text-gray-300 mb-8 space-y-2 flex-grow">
+                                    <li class="flex items-start">
+                                        ${getIconSvg('check', E6DATA_TEXT_COLOR)} 
+                                        <span>Eliminate the need for expensive provisioned Spark.</span>
+                                    </li>
+                                    <li class="flex items-start">
+                                        ${getIconSvg('check', E6DATA_TEXT_COLOR)} 
+                                        <span>Use a highly optimized, cloud-native query engine.</span>
+                                    </li>
+                                </ul>
+                                <div class="w-full flex justify-center mt-auto flex-shrink-0"> 
+                                    <button onclick="renderPage('e6data', 'compute')" class="bg-violet-600 hover:bg-violet-700 text-white font-bold py-3 px-8 rounded-full text-lg shadow-lg transition duration-300 transform hover:scale-105 w-full">
+                                        Select e6data Solution
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    break;
+
+                case 'qbeast':
+                    title = 'Qbeast Solution: Optimizing the Storage Layer';
+                    const qbeastData = {
+                        solution: 'Qbeast',
+                        savings: 'Up to 6x Savings', 
+                        highlight_layers: ['format', 'storage'], 
+                        highlight_color: QBEAST_TEXT_COLOR,
+                        highlight_border: QBEAST_BORDER_COLOR,
+                        highlight_bg: QBEAST_BG_COLOR,
+                        highlight_detail: {
+                            compute: 'Queries are faster because they access less data.',
+                            format: 'Standard metadata layer (Delta/Iceberg) leveraged by Qbeast.',
+                            storage: '**Foundation:** Data is physically clustered by Qbeast for faster retrieval.'
+                        }
+                    };
+                    content = `
+                        <h1 class="text-4xl font-extrabold ${QBEAST_TEXT_COLOR} mb-6 md:mb-8 tracking-tight animated-card mt-0">
+                            ${title}
+                        </h1>
+                        <p class="text-lg md:text-xl text-gray-300 mb-4 md:mb-6 animated-card flex-shrink-0" style="animation-delay: 0.2s;">
+                            Qbeast optimizes the underlying data structure itself, leading to dramatic reductions in data scanned.
+                        </p>
+
+                        <div class="flex flex-col items-center space-y-3 md:space-y-4 flex-grow">
+                            ${renderArchitecture(qbeastData)}
+                        </div>
+                        ${renderSavings(qbeastData.savings)}
+                        <div class="mt-4 md:mt-6 animated-card flex-shrink-0" style="animation-delay: 3.5s;">
+                            <h2 class="text-2xl md:text-3xl font-semibold text-white mb-4 md:mb-6">Do you still want to cut down on costs?</h2>
+                            <button onclick="renderPage('hybrid', 'qbeast')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-full text-lg md:text-xl shadow-lg transition duration-300 transform hover:scale-105">
+                                Explore Our Hybrid Solution
+                            </button>
+                        </div>
+                    `;
+                    break;
+
+                case 'e6data':
+                    title = 'e6data Solution: Optimizing the Compute Layer';
+                    const e6dataData = {
+                        solution: 'e6data',
+                        savings: 'Up to 5x Savings',
+                        highlight_layers: ['compute'],
+                        highlight_color: E6DATA_TEXT_COLOR,
+                        highlight_border: E6DATA_BORDER_COLOR,
+                        highlight_bg: E6DATA_BG_COLOR,
+                        highlight_detail: {
+                            compute: 'Click to see **e6data’s core optimizations** that eliminate expensive clusters and boost speed.',
+                            format: ARCHITECTURE_DATA.find(d => d.id === 'format').description,
+                            storage: ARCHITECTURE_DATA.find(d => d.id === 'storage').description
+                        }
+                    };
+                    content = `
+                        <h1 class="text-4xl font-extrabold ${E6DATA_TEXT_COLOR} mb-6 md:mb-8 tracking-tight animated-card mt-0">
+                            ${title}
+                        </h1>
+                        <p class="text-lg md:text-xl text-gray-300 mb-4 md:mb-6 animated-card flex-shrink-0" style="animation-delay: 0.2s;">
+                            e6data replaces slow, expensive Spark with a cloud-native query engine that processes data much faster.
+                        </p>
+
+                        <div class="flex flex-col items-center space-y-3 md:space-y-4 flex-grow">
+                            ${renderArchitecture(e6dataData)}
+                        </div>
+                        ${renderSavings(e6dataData.savings)}
+                        <div class="mt-8 md:mt-10 animated-card flex-shrink-0" style="animation-delay: 2.5s;">
+                            <h2 class="text-2xl md:text-3xl font-semibold text-white mb-4 md:mb-6">Do you still want to cut down on costs?</h2>
+                            <button onclick="renderPage('hybrid', 'e6data')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-full text-lg md:text-xl shadow-lg transition duration-300 transform hover:scale-105">
+                                Explore Our Hybrid Solution
+                            </button>
+                        </div>
+                    `;
+                    break;
+
+                case 'hybrid':
+                    title = 'The Ultimate Hybrid Solution: Qbeast + e6data';
+                    const hybridData = {
+                        solution: 'Hybrid',
+                        savings: 'Up to 10x+ Savings', // Updated savings
+                        highlight_layers: ['compute', 'format', 'storage'], // All layers benefit
+                        // Removed highlight_color, border, bg as they are now set dynamically in renderArchitecture
+                        highlight_detail: {
+                            compute: '**e6data Acceleration:** Highly efficient engine processes optimized data at maximum speed.',
+                            format: 'Standard metadata layer (Delta/Iceberg) used by Qbeast.',
+                            storage: '**Foundation:** Data is physically clustered and stored cost-effectively.'
+                        }
+                    };
+                    content = `
+                        <h1 class="text-4xl font-extrabold text-green-400 mb-6 md:mb-8 tracking-tight animated-card mt-0">
+                            ${title}
+                        </h1>
+                        <p class="text-lg md:text-xl text-gray-300 mb-4 md:mb-6 animated-card flex-shrink-0" style="animation-delay: 0.2s;">
+                            By combining **Qbeast's intelligent data layout** and **e6data's lightning-fast engine**, you achieve maximum cost and performance benefits.
+                        </p>
+
+                        <div class="flex flex-col items-center space-y-3 md:space-y-4 flex-grow">
+                            ${renderArchitecture(hybridData)}
+                        </div>
+                        ${renderSavings(hybridData.savings)}
+
+                        <div class="mt-4 md:mt-6 animated-card flex-shrink-0" style="animation-delay: 3.5s;">
+                            <h2 class="text-2xl md:text-3xl font-semibold text-white mb-4 md:mb-6">Ready to maximize your cost efficiency?</h2>
+                            <button onclick="renderPage('challenge')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-full text-lg md:text-xl shadow-lg transition duration-300 transform hover:scale-105">
+                                Home Page
+                            </button>
+                        </div>
+                    `;
+                    break;
+            }
+
+            container.innerHTML = content;
+        };
+
+        // Initialize the presentation
+        window.onload = () => {
+            renderPage('challenge');
+        };
+    </script>
+</body>
+</html>
